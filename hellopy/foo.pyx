@@ -104,7 +104,7 @@ def blah():
         "~/Virtual Machines.localized/test.vmwarevm/test.vmx")
 
     jobHandle = VixVM_Open(hostHandle,
-                           vmxPath,
+                           vmxPath.encode('UTF-8'),
                            NULL,
                            NULL)
     err = VixJob_Wait(jobHandle,

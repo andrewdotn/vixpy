@@ -6,7 +6,7 @@
 
 import foo
 
-print dir(foo)
+print(dir(foo))
 
 #x = foo.VixHostConnect(-1,
 #                   3,

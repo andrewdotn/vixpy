@@ -2,13 +2,14 @@ SHELL = /bin/bash -eu
 .DELETE_ON_ERROR:
 
 all: foo.so
-	python test.py
+	python3.5 test.py
 
 foo.so: foo.c
 	gcc -shared -fPIC $< \
-		-I/System/Library/Frameworks/Python.framework/Headers \
+		-I/opt/homebrew/Frameworks/Python.framework/Versions/3.5/Headers \
 		-I../vix/include \
-		-lpython \
+		-L/opt/homebrew/Frameworks/Python.framework/Versions/3.5/lib \
+		-lpython3.5 \
 		-L../vix -l vixAllProducts \
 	-o $@
 	install_name_tool -change libvixAllProducts.dylib /Applications/VMware\ Fusion.app/Contents/Public/libvixAllProducts.dylib $@
@@ -16,4 +17,5 @@ foo.so: foo.c
 foo.c: foo.pyx
 	cython $<
 
-
+clean:
+	rm -f foo.c foo.so
