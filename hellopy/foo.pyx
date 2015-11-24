@@ -6,6 +6,7 @@ print "hello, world"
 START_TIME = time.time()
 
 VIX_INVALID_HANDLE   = 0
+VIX_VMDELETE_DISK_FILES     = 0x0002
 
 VIX_OK = 0
 
@@ -115,6 +116,19 @@ cdef extern from "vix.h":
                                  VixEventProc *callbackProc,
                                  void *clientData);
 
+    cdef VixHandle VixVM_CopyFileFromGuestToHost(VixHandle vmHandle,
+                                        const char *hostPathName,
+                                        const char *guestPathName,
+                                        int options,
+                                        VixHandle propertyListHandle,
+                                        VixEventProc *callbackProc,
+                                        void *clientData);
+
+
+    cdef VixHandle VixVM_Delete(VixHandle vmHandle,
+                       int options,
+                       VixEventProc *callbackProc,
+                       void *clientData);
 
 def blah():
     x = VixHost_Connect(-1,
@@ -161,7 +175,7 @@ def blah():
     Vix_ReleaseHandle(jobHandle)
 
     clone1path = os.path.expanduser(
-        "~/Virtual Machines.localized/test.vmwarevm/vixpy-base-clone1.vmx")
+        "~/Virtual Machines.localized/vixpy-clone1.vmwarevm/vixpy-clone1.vmx")
 
     jobHandle = VixVM_Clone(vmHandle,
                             VIX_INVALID_HANDLE,
@@ -181,7 +195,7 @@ def blah():
         print "Error 1: %d" % err
         return
     jobHandle = VixVM_PowerOn(cloneVmHandle,
-                              VIX_VMPOWEROP_LAUNCH_GUI,
+                              VIX_VMPOWEROP_NORMAL,
                               VIX_INVALID_HANDLE,
                               NULL,
                               NULL);
@@ -219,19 +233,38 @@ def blah():
         print "Error 4: %d" % err
         return
 
-   #  jobHandle = VixVM_PowerOn(vmHandle,
-   #                            VIX_VMPOWEROP_LAUNCH_GUI,
-   #                            VIX_INVALID_HANDLE,
-   #                            NULL,
-   #                            NULL);
-   #  err = VixJob_Wait(jobHandle, VIX_PROPERTY_NONE);
+    jobHandle = VixVM_CopyFileFromGuestToHost(
+        cloneVmHandle,
+        "/tmp/foo".encode("UTF-8"),
+        "foofile".encode("UTF-8"),
+        0,
+        VIX_INVALID_HANDLE,
+        NULL,
+        NULL);
+    err = VixJob_Wait(jobHandle, VIX_PROPERTY_NONE);
+    if err != VIX_OK:
+        print "Error 5: %d" % err
+        return
 
-   #  time.sleep(5)
+    print(open('foofile').read())
 
-   #  jobHandle = VixVM_PowerOff(vmHandle,
-   #                            VIX_VMPOWEROP_NORMAL,
-   #                            NULL,
-   #                            NULL);
+    jobHandle = VixVM_PowerOff(cloneVmHandle,
+                             VIX_VMPOWEROP_NORMAL,
+                             NULL,
+                             NULL);
+    err = VixJob_Wait(jobHandle, VIX_PROPERTY_NONE);
+    if err != VIX_OK:
+        print "Error 6: %d" % err
+        return
+
+    jobHandle = VixVM_Delete(cloneVmHandle,
+                             2,
+                             NULL,
+                             NULL);
+    err = VixJob_Wait(jobHandle, VIX_PROPERTY_NONE);
+    if err != VIX_OK:
+        print "Error 7: %d" % err
+        return
 
 print repr(blah());
 
