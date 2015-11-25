@@ -1,7 +1,7 @@
 import os.path
 import time
 
-print "hello, world"
+from threading import Thread
 
 START_TIME = time.time()
 
@@ -10,12 +10,21 @@ VIX_VMDELETE_DISK_FILES     = 0x0002
 
 VIX_OK = 0
 
+VIX_EVENTTYPE_JOB_COMPLETED          = 2
+VIX_EVENTTYPE_JOB_PROGRESS           = 3
+VIX_EVENTTYPE_FIND_ITEM              = 8
+VIX_EVENTTYPE_CALLBACK_SIGNALLED     = 2 # Deprecated
+
+VIX_PROPERTY_JOB_RESULT_ERROR_CODE                 = 3000
+
+
 cdef extern from "vix.h":
 
     ctypedef int VixHandle
 
     ctypedef int VixHostOptions
     ctypedef int VixEventType
+    ctypedef int VixError
 
     cdef enum VixServiceProvider:
         VIX_SERVICEPROVIDER_DEFAULT                   = 1
@@ -25,7 +34,8 @@ cdef extern from "vix.h":
         VIX_SERVICEPROVIDER_VMWARE_VI_SERVER          = 10
         VIX_SERVICEPROVIDER_VMWARE_WORKSTATION_SHARED = 11
 
-    cdef enum VixPropertyID:
+    ctypedef int VixPropertyID
+    cdef enum:
         VIX_PROPERTY_JOB_RESULT_HANDLE                     = 3010
         VIX_PROPERTY_NONE                                  = 0
 
@@ -36,7 +46,8 @@ cdef extern from "vix.h":
         VIX_VMPOWEROP_LAUNCH_GUI                  = 0x0200
         VIX_VMPOWEROP_START_VM_PAUSED             = 0x1000
 
-    cdef enum VixCloneType:
+    ctypedef int VixCloneType
+    cdef enum:
        VIX_CLONETYPE_FULL       = 0
        VIX_CLONETYPE_LINKED     = 1
 
@@ -46,13 +57,15 @@ cdef extern from "vix.h":
 
 
     ctypedef void VixEventProc(VixHandle handle,
-                                                                VixEventType
-                                    eventType,
-                                                                VixHandle
-                                    moreEventInfo,
-                                                                void
-                                    *clientData)
+                               VixEventType eventType,
+                               VixHandle moreEventInfo,
+                               void *clientData)
 
+    cdef const char* Vix_GetErrorText(VixError err,
+                                      const char *locale);
+
+    cdef VixError Vix_GetProperties(VixHandle handle,
+                                    VixPropertyID firstPropertyID, ...);
 
     cdef VixHandle VixHost_Connect(int apiVersion,
                           VixServiceProvider hostType,
@@ -65,8 +78,10 @@ cdef extern from "vix.h":
                           VixEventProc *callbackProc,
                           void *clientData);
 
+    cdef void VixHost_Disconnect(VixHandle hostHandle);
+
     cdef VixHandle VixJob_Wait(VixHandle jobHandle,
-                               VixPropertyID, ...)
+                               VixPropertyID, ...) nogil
 
     cdef void Vix_ReleaseHandle(VixHandle handle)
 
@@ -130,8 +145,37 @@ cdef extern from "vix.h":
                        VixEventProc *callbackProc,
                        void *clientData);
 
-def blah():
-    x = VixHost_Connect(-1,
+##
+
+class Closeable():
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+def _vix_format_error(errCode):
+    return "Vix operation failed with code %d: %s" % (
+        errCode, Vix_GetErrorText(errCode, NULL).decode('UTF-8'))
+
+def _vix_check_error(retCode):
+    if retCode != VIX_OK:
+        raise Exception(_vix_format_error(retCode))
+
+def _vix_wait_job_and_check_error(jobHandle):
+    cdef VixHandle handle = jobHandle
+    try:
+        with nogil:
+            retCode = VixJob_Wait(handle, VIX_PROPERTY_NONE)
+        _vix_check_error(retCode)
+    finally:
+        Vix_ReleaseHandle(jobHandle)
+
+class VixHost(Closeable):
+
+    def __init__(self):
+        cdef VixHandle hostHandle = VIX_INVALID_HANDLE
+        jobHandle = VixHost_Connect(-1,
                    VIX_SERVICEPROVIDER_VMWARE_WORKSTATION,
                    "",
                    0,
@@ -140,133 +184,129 @@ def blah():
                    0,
                    VIX_INVALID_HANDLE,
                    NULL,
-                   NULL);
-    print "x is %s" % x
+                   NULL)
+        try:
+            _vix_check_error(VixJob_Wait(jobHandle,
+                            VIX_PROPERTY_JOB_RESULT_HANDLE,
+                            &hostHandle,
+                            VIX_PROPERTY_NONE))
+            self.hostHandle = hostHandle
+        finally:
+            Vix_ReleaseHandle(jobHandle)
 
-    cdef VixHandle hostHandle
-    r = VixJob_Wait(x,
-                    VIX_PROPERTY_JOB_RESULT_HANDLE,
-                    &hostHandle,
-                    VIX_PROPERTY_NONE)
+    def close(self):
+        VixHost_Disconnect(self.hostHandle)
 
-    print "VixJob_Wait return is %d" % r
+class VixVm(Closeable):
 
-    print "hostHandle is %d\n" % hostHandle
+    def __init__(self, host, path):
+        self.host = host
+        self.path = path
 
-    Vix_ReleaseHandle(x)
+        cdef VixHandle vmHandle = VIX_INVALID_HANDLE
 
-    cdef VixHandle vmHandle
+        jobHandle = VixVM_Open(self.host.hostHandle,
+                   path.encode('UTF-8'), NULL, NULL)
+        try:
+            _vix_check_error(VixJob_Wait(jobHandle,
+                                          VIX_PROPERTY_JOB_RESULT_HANDLE,
+                                          &vmHandle,
+                                          VIX_PROPERTY_NONE))
+            self.vmHandle = vmHandle
+        finally:
+            Vix_ReleaseHandle(jobHandle)
 
-    vmxPath = os.path.expanduser(
+    def close(self):
+        print "Closing", self
+        Vix_ReleaseHandle(self.vmHandle)
+
+    def power_on(self):
+        print "power_on(%s)" % str(self)
+        _vix_wait_job_and_check_error(VixVM_PowerOn(
+            self.vmHandle,
+            VIX_VMPOWEROP_NORMAL,
+            VIX_INVALID_HANDLE,
+            NULL,
+            NULL))
+        print "power_on(%s) done" % str(self)
+
+    def power_off(self):
+        print "power_off(%s)" % str(self)
+        _vix_wait_job_and_check_error(VixVM_PowerOff(
+            self.vmHandle,
+            VIX_VMPOWEROP_NORMAL,
+            NULL,
+            NULL))
+        print "power_off(%s) done" % str(self)
+
+    def wait_for_tools(self, timeout=30):
+        print "wait_for_tools(%s)" % str(self)
+        _vix_wait_job_and_check_error(VixVM_WaitForToolsInGuest(
+            self.vmHandle, timeout, NULL, NULL))
+        print "wait_for_tools(%s) done" % str(self)
+
+    def clone(self, dest, linked=True):
+        print "clone(%s)" % str(self)
+        cdef VixCloneType cloneType
+        if linked:
+            cloneType  = VIX_CLONETYPE_LINKED
+        else:
+            cloneType  = VIX_CLONETYPE_FULL
+
+        _vix_wait_job_and_check_error(VixVM_Clone(
+            self.vmHandle,
+            VIX_INVALID_HANDLE,
+            cloneType,
+            dest.encode('UTF-8'),
+            0,
+            VIX_INVALID_HANDLE,
+            NULL,
+            NULL))
+        print "clone(%s) done" % str(self)
+
+    def delete(self):
+        print "delete(%s)" % str(self)
+        _vix_wait_job_and_check_error(VixVM_Delete(
+            self.vmHandle,
+            2,
+            NULL,
+            NULL))
+        print "delete(%s) done" % str(self)
+
+    def __str__(self):
+        return "VixVM<%s>" % self.path
+
+##
+
+with VixHost() as h:
+    print "Host handle", h.hostHandle
+
+    vmx_path = os.path.expanduser(
         "~/Virtual Machines.localized/vixpy-base.vmwarevm/vixpy-base.vmx")
 
-    jobHandle = VixVM_Open(hostHandle,
-                           vmxPath.encode('UTF-8'),
-                           NULL,
-                           NULL)
-    err = VixJob_Wait(jobHandle,
-                      VIX_PROPERTY_JOB_RESULT_HANDLE,
-                      &vmHandle,
-                      VIX_PROPERTY_NONE)
-    if err != VIX_OK:
-        print "Error 0: %d" % err
-        return
+    with VixVm(h, vmx_path) as base_vm:
 
-    Vix_ReleaseHandle(jobHandle)
+        def do_stuff(i):
+            def func():
+                clone_path = os.path.expanduser(
+                    "~/Virtual Machines.localized/vixpy-clone%d.vmwarevm/vixpy-clone%d.vmx" % (i, i))
+                base_vm.clone(clone_path)
 
-    clone1path = os.path.expanduser(
-        "~/Virtual Machines.localized/vixpy-clone1.vmwarevm/vixpy-clone1.vmx")
+                with VixVm(h, clone_path) as child:
+                    child.power_on()
+                    child.wait_for_tools()
+                    child.power_off()
+                    child.delete()
 
-    jobHandle = VixVM_Clone(vmHandle,
-                            VIX_INVALID_HANDLE,
-                            VIX_CLONETYPE_LINKED,
-                            clone1path.encode('UTF-8'),
-                            0,
-                            VIX_INVALID_HANDLE,
-                            NULL,
-                            NULL);
+            return func
 
-    cdef VixHandle cloneVmHandle
-    err = VixJob_Wait(jobHandle,
-                      VIX_PROPERTY_JOB_RESULT_HANDLE,
-                      &cloneVmHandle,
-                      VIX_PROPERTY_NONE)
-    if err != VIX_OK:
-        print "Error 1: %d" % err
-        return
-    jobHandle = VixVM_PowerOn(cloneVmHandle,
-                              VIX_VMPOWEROP_NORMAL,
-                              VIX_INVALID_HANDLE,
-                              NULL,
-                              NULL);
-    err = VixJob_Wait(jobHandle, VIX_PROPERTY_NONE);
-    if err != VIX_OK:
-        print "Error 2: %d" % err
-        return
-
-
-    jobHandle = VixVM_WaitForToolsInGuest(cloneVmHandle, 30, NULL, NULL);
-    err = VixJob_Wait(jobHandle, VIX_PROPERTY_NONE);
-    if err != VIX_OK:
-        print "Error 3: %d" % err
-        return
-
-    jobHandle = VixVM_LoginInGuest(cloneVmHandle,
-                       "root".encode('UTF-8'),
-                       "test".encode("UTF-8"),
-                       0,
-                       NULL, NULL)
-    err = VixJob_Wait(jobHandle, VIX_PROPERTY_NONE);
-    if err != VIX_OK:
-        print "Error 4: %d" % err
-        return
-
-    jobHandle = VixVM_RunScriptInGuest(cloneVmHandle,
-                                 "/bin/bash".encode("UTF-8"),
-                                 "date > /tmp/foo".encode("UTF-8"),
-                                 0,
-                                 VIX_INVALID_HANDLE,
-                                 NULL,
-                                 NULL)
-    err = VixJob_Wait(jobHandle, VIX_PROPERTY_NONE);
-    if err != VIX_OK:
-        print "Error 4: %d" % err
-        return
-
-    jobHandle = VixVM_CopyFileFromGuestToHost(
-        cloneVmHandle,
-        "/tmp/foo".encode("UTF-8"),
-        "foofile".encode("UTF-8"),
-        0,
-        VIX_INVALID_HANDLE,
-        NULL,
-        NULL);
-    err = VixJob_Wait(jobHandle, VIX_PROPERTY_NONE);
-    if err != VIX_OK:
-        print "Error 5: %d" % err
-        return
-
-    print(open('foofile').read())
-
-    jobHandle = VixVM_PowerOff(cloneVmHandle,
-                             VIX_VMPOWEROP_NORMAL,
-                             NULL,
-                             NULL);
-    err = VixJob_Wait(jobHandle, VIX_PROPERTY_NONE);
-    if err != VIX_OK:
-        print "Error 6: %d" % err
-        return
-
-    jobHandle = VixVM_Delete(cloneVmHandle,
-                             2,
-                             NULL,
-                             NULL);
-    err = VixJob_Wait(jobHandle, VIX_PROPERTY_NONE);
-    if err != VIX_OK:
-        print "Error 7: %d" % err
-        return
-
-print repr(blah());
+        threads = []
+        for i in range(0, 4):
+            threads.append(Thread(target=do_stuff(i)))
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
 END_TIME = time.time()
 
