@@ -1,6 +1,8 @@
 import os.path
+import tempfile
 import time
 
+from pathlib import Path
 from threading import Thread
 
 START_TIME = time.time()
@@ -186,6 +188,7 @@ class VixHost(Closeable):
                    NULL,
                    NULL)
         try:
+            # FIXME: nogil
             _vix_check_error(VixJob_Wait(jobHandle,
                             VIX_PROPERTY_JOB_RESULT_HANDLE,
                             &hostHandle,
@@ -196,6 +199,45 @@ class VixHost(Closeable):
 
     def close(self):
         VixHost_Disconnect(self.hostHandle)
+
+class _VixGuest():
+
+    def __init__(self, vm):
+        self.vmHandle = vm.vmHandle
+
+    def run_command(self, command, capture_stderr=True):
+        "Run command and return output"
+        guest_tmp = "/tmp/" + os.urandom(10).hex()
+
+        guest_command = "%s > %s %s" % (
+            command,
+            guest_tmp,
+            "2>&1" if capture_stderr else "")
+
+        # TODO: check exit code
+        _vix_wait_job_and_check_error(VixVM_RunScriptInGuest(
+            self.vmHandle,
+            "/bin/bash".encode('UTF-8'),
+            guest_command.encode('UTF-8'),
+            0,
+            VIX_INVALID_HANDLE,
+            NULL,
+            NULL))
+
+        tmp_prefix = os.path.basename(__name__)
+
+        with tempfile.TemporaryDirectory(prefix=tmp_prefix) as tmpdir:
+            tmpfile = Path(tmpdir) / 'out'
+            _vix_wait_job_and_check_error(VixVM_CopyFileFromGuestToHost(
+                self.vmHandle,
+                guest_tmp.encode('UTF-8'),
+                str(tmpfile).encode('UTF-8'),
+                0,
+                VIX_INVALID_HANDLE,
+                NULL,
+                NULL))
+            return tmpfile.read_text()
+        # TODO: delete file from guest
 
 class VixVm(Closeable):
 
@@ -273,6 +315,18 @@ class VixVm(Closeable):
             NULL))
         print "delete(%s) done" % str(self)
 
+    def login(self, user, password):
+        print "login(%s)" % str(self)
+        _vix_wait_job_and_check_error(VixVM_LoginInGuest(
+            self.vmHandle,
+            user.encode('UTF-8'),
+            password.encode('UTF-8'),
+            0,
+            NULL,
+            NULL))
+        print "login(%s) done" % str(self)
+        return _VixGuest(self)
+
     def __str__(self):
         return "VixVM<%s>" % self.path
 
@@ -293,10 +347,14 @@ with VixHost() as h:
                 base_vm.clone(clone_path)
 
                 with VixVm(h, clone_path) as child:
-                    child.power_on()
-                    child.wait_for_tools()
-                    child.power_off()
-                    child.delete()
+                    try:
+                        child.power_on()
+                        child.wait_for_tools()
+                        guest = child.login('root', 'test')
+                        print guest.run_command("ip link")
+                    finally:
+                        child.power_off()
+                        child.delete()
 
             return func
 
