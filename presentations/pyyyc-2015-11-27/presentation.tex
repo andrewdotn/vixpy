@@ -111,7 +111,55 @@
 \end{frame}
 
 \begin{frame}{Example: OpenVPN}
-TODO: graphic
+\includegraphics[max width=0.9\paperwidth,center,page=1]{OpenVPN.pdf}
+\end{frame}
+
+\begin{frame}{Example: OpenVPN}
+\includegraphics[max width=0.9\paperwidth,center,page=2]{OpenVPN.pdf}
+\end{frame}
+
+\begin{frame}{Example: OpenVPN}
+\includegraphics[max width=0.9\paperwidth,center,page=3]{OpenVPN.pdf}
+\end{frame}
+
+\begin{frame}{Example: OpenVPN}
+\includegraphics[max width=0.9\paperwidth,center,page=4]{OpenVPN.pdf}
+\end{frame}
+
+\begin{frame}{Example: OpenVPN}
+\includegraphics[max width=0.9\paperwidth,center,page=5]{OpenVPN.pdf}
+\end{frame}
+
+\begin{frame}{Example: OpenVPN}
+\includegraphics[max width=0.9\paperwidth,center,page=6]{OpenVPN.pdf}
+\end{frame}
+
+\begin{frame}{Example: OpenVPN}
+\centering
+Testing this requires at least 4 VMs \\
+and three networks
+\end{frame}
+
+\begin{frame}[fragile]{Typical solution: Vagrant}
+
+\small
+
+Vagrantfile:
+
+{
+\leftskip=1in
+\begin{verbatim}
+Vagrant.configure(2) do |config|
+  config.vm.box = "bento/centos-7.1"
+
+  %w[client1 gw1 gw2 client2 cm].each do |name|
+    config.vm.define name
+  end
+end
+\end{verbatim}
+}
+
+\texttt{\$ vagrant up \\ ...}
 \end{frame}
 
 \begin{frame}{Typical solution: Vagrant}
@@ -124,24 +172,22 @@ Advantages:
 \end{frame}
 
 \begin{frame}{Typical solution: Vagrant}
-Disadvantages, for other uses:
+Disadvantages for automatic service testing:
 \begin{itemize}
 \item declarative specification file
-\only<1>{
+\only<2>{
     \begin{itemize}
     \item Tricky to configure dynamically
     \end{itemize}
 }
-\pause
 \item \texttt{vagrant} command-line tool
-\only<2>{
+\only<3>{
     \begin{itemize}
     \item no API for interacting with VMs
     \end{itemize}
 }
-\pause
 \item support for 20+ cloud providers
-\only<3>{
+\only<4>{
     \begin{itemize}
     \item lowest-common-denominator support
     \item no snapshots
@@ -149,13 +195,14 @@ Disadvantages, for other uses:
     \end{itemize}
 }
 \end{itemize}
-\only<4>{Spinning up an OpenVPN testbed
-    \begin{itemize}
-    \item really, really slow
-    \item making a mistake means starting over
-    \item can’t actually test OpenVPN due to networking issues
-    \end{itemize}
-}
+\end{frame}
+
+\begin{frame}{Typical solution: vagrant}
+\begin{itemize}
+\item really, really slow
+\item making a mistake means starting over
+\item can’t actually test OpenVPN due to networking issues
+\end{itemize}
 \end{frame}
 
 \begin{frame}{VMware Fusion/Workstation}
