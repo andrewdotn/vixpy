@@ -32,7 +32,7 @@ with VixHost() as h:
             return func
 
         threads = []
-        for i in range(0, 4):
+        for i in range(0, 5):
             threads.append(Thread(target=do_stuff(i)))
         for t in threads:
             t.start()
